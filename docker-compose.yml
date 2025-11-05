@@ -1,0 +1,102 @@
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics
+    hostname: victoriametrics
+    container_name: victoriametrics
+    ports:
+      - "${VM_HTTP_PORT}:8428" # VictoriaMetrics HTTP API and UI
+    volumes:
+      - ${VM_DATA_PATH}:/var/lib/victoria-metrics-data # Persistent data storage
+      - ./stream-aggregation.yml:/etc/victoriametrics/stream-aggregation.yml # Stream aggregation rules
+    command:
+      - "--storageDataPath=/var/lib/victoria-metrics-data"
+      - "--storage.minFreeDiskSpaceBytes=${VM_MIN_FREE_DISK_SPACE}"
+      - "--retentionPeriod=${VM_RETENTION_PERIOD}"
+      - "--memory.allowedPercent=${VM_ALLOWED_MEMORY_PERCENT}"
+      - "--search.cacheTimestampOffset=1440m"
+      - "--dedup.minScrapeInterval=${VM_MIN_SCRAPE_INTERVAL}"
+    env_file:
+      - .env
+    networks:
+      - victoria-net
+    deploy:
+      resources:
+        limits:
+          cpus: ${VM_CPU_CORES} # Limit to 2 cores
+          memory: ${VM_MEMORY_LIMIT}
+    restart: 'no'
+
+  vmagent:
+    image: victoriametrics/vmagent
+    container_name: vmagent
+    hostname: vmagent
+    ports:
+      - "${VMA_HTTP_PORT}:8429" # vmagent Prometheus push endpoint
+      - "${VMA_JSON_PORT}:8429" # JSON push endpoint (/api/v1/import)
+    command:
+      - -remoteWrite.url=http://victoriametrics:8428/api/v1/write # Forward data to VictoriaMetrics
+      - -remoteWrite.vmProtoCompressLevel=1 # Enable VictoriaMetrics remote write protocol with compression <button class="citation-flag" data-index="7">
+      - -promscrape.config=/etc/vmagent/prometheus-relabel.yml # Placeholder for future relabeling
+      - -remoteWrite.bearerToken=${VMA_AUTH_TOKEN} # Use the bearer token for authentication
+    volumes:
+      - ./prometheus-relabel.yml:/etc/vmagent/prometheus-relabel.yml # Empty config for future relabeling
+    environment:
+      - VMA_AUTH_TOKEN=${VMA_AUTH_TOKEN} # Token-based authentication
+    env_file:
+      - .env
+    networks:
+      - victoria-net
+    deploy:
+      resources:
+        limits:
+          cpus: '2' # Limit to 2 cores
+          memory: 8G # Limit to 8GB RAM
+    restart: 'no'
+
+  victorialogs:
+    image: victoriametrics/victoria-logs:latest
+    container_name: victorialogs
+    hostname: victorialogs
+    ports:
+      - "${VLO_HTTP_PORT:-9428}:9428"  # Expose VictoriaLogs UI and API
+    environment:
+      - VLO_STORAGE_PATH=/victoria-logs-data
+      - VLO_MAX_LOG_SIZE=${VLO_MAX_LOG_SIZE:-100MB}  # Max log size per file
+      - VLO_RETENTION_PERIOD=${VLO_RETENTION_PERIOD:-30d}  # Log retention period
+      - VLO_MAX_LOGS=${VLO_MAX_LOGS:-1000000}  # Max number of logs to store
+      - VLO_AUTH_API_KEY=${VLO_AUTH_API_KEY:-your-api-key}  # API key for authentication
+    volumes:
+      - ${VLO_STORAGE_PATH}:/victoria-logs-data
+    networks:
+      - victoria-net
+    restart: unless-stopped
+
+  victoriatraces:
+    image: victoriametrics/victoria-traces:latest
+    container_name: victoriatraces
+    hostname: victoriatraces
+    ports:
+      - "${VTR_HTTP_PORT:-10428}:10428"  # Expose VictoriaTraces UI and API
+    command:
+      - "--storageDataPath=/victoria-traces-data"
+      - "--retentionPeriod=30d"                    # keep traces for 30 days
+      - "--retention.maxDiskSpaceUsageBytes=200MB" # cap storage at ~200MB
+      - "--envflag.enable=true"
+      - "--envflag.prefix=VTR_"
+      - "--httpListenAddr=:10428"
+      - "--loggerLevel=INFO"
+    volumes:
+      - ${VTR_STORAGE_PATH}:/victoria-traces-data
+    networks:
+      - victoria-net
+    restart: unless-stopped
+
+
+
+networks:
+  victoria-net:
+    driver: bridge
+
+volumes:
+  victoria-data: {}
